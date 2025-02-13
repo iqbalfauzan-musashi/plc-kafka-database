@@ -1,0 +1,15 @@
+{
+  "name": "modbus-kafka-project",
+  "version": "1.0.0",
+  "description": "Modbus to Kafka integration project",
+  "main": "scripts/modbus-kafka-client.js",
+  "scripts": {
+    "start:producer": "node scripts/modbus-kafka-client.js",
+    "start:consumer": "node scripts/consumer-app.js"
+  },
+  "dependencies": {
+    "jsmodbus": "^4.0.6",
+    "kafkajs": "^2.2.4",
+    "mssql": "^9.1.1"
+  }
+}
