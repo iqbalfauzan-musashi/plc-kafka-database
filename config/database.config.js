@@ -7,13 +7,14 @@ const dbConfig = {
   options: {
     encrypt: true,
     trustServerCertificate: true,
-    enableArithAbort: true,
+    enableArithAbort: true
   },
   pool: {
     max: 20,
     min: 0,
-    idleTimeoutMillis: 30000,
-  },
+    idleTimeoutMillis: 30000
+  }
 };
 
 module.exports = { dbConfig };
+

@@ -1,15 +1,44 @@
 {
   "name": "modbus-kafka-project",
   "version": "1.0.0",
-  "description": "Modbus to Kafka integration project",
+  "description": "Modbus to Kafka integration project for machine monitoring",
   "main": "scripts/modbus-kafka-client.js",
   "scripts": {
-    "start:producer": "node scripts/modbus-kafka-client.js",
-    "start:consumer": "node scripts/consumer-app.js"
+    "start": "node scripts/modbus-kafka-client.js",
+    "start:producer": "node scripts/producer-app.js",
+    "start:consumer": "node scripts/consumer-app.js",
+    "start:modbus": "node scripts/modbus-kafka-client.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "nodemon scripts/modbus-kafka-client.js",
+    "dev:producer": "nodemon scripts/producer-app.js",
+    "dev:consumer": "nodemon scripts/consumer-app.js"
   },
   "dependencies": {
     "jsmodbus": "^4.0.6",
     "kafkajs": "^2.2.4",
-    "mssql": "^9.1.1"
+    "mssql": "^9.1.1",
+    "net": "^1.0.2"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.22"
+  },
+  "keywords": [
+    "modbus",
+    "kafka",
+    "iot",
+    "plc",
+    "machine-monitoring"
+  ],
+  "author": "",
+  "license": "ISC",
+  "nodemonConfig": {
+    "ignore": [
+      "node_modules/*",
+      "logs/*"
+    ],
+    "delay": "2500"
+  },
+  "engines": {
+    "node": ">=14.0.0"
   }
 }
