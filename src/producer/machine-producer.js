@@ -1,4 +1,4 @@
-// src/producer/machine-producer.js
+//src/producer/machine-producer.js
 const { Kafka } = require("kafkajs");
 const { kafkaConfig } = require("../../config/kafka.config");
 const logger = require('../utils/logger');

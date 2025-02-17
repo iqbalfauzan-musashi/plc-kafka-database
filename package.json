@@ -16,6 +16,8 @@
   "dependencies": {
     "jsmodbus": "^4.0.6",
     "kafkajs": "^2.2.4",
+    "moment": "^2.30.1",
+    "moment-timezone": "^0.5.47",
     "mssql": "^9.1.1",
     "net": "^1.0.2"
   },

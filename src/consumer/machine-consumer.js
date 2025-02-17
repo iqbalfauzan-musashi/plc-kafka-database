@@ -1,6 +1,7 @@
 // src/consumer/machine-consumer.js
 const { Kafka } = require("kafkajs");
 const sql = require("mssql");
+const moment = require('moment-timezone');
 const { kafkaConfig } = require("../../config/kafka.config");
 const { dbConfig } = require("../../config/database.config");
 const logger = require('../utils/logger');
@@ -49,49 +50,94 @@ class MachineConsumer {
     }
   }
 
-  async saveToDatabase(machineCode, data, isUpdate) {
+  getCurrentTimestamp() {
+    return moment().tz('Asia/Jakarta').toDate();
+  }
+
+  async updateRealtimeStatus(machineCode, data) {
     try {
       const request = this.pool.request();
-      const [idOperation, sendPlc, machineCounter] = data;
-      const operationName = OperationTranslator.getOperationName(idOperation);
+      const [statusCode, sendPlc, machineCounter] = data;
+      const operationName = OperationTranslator.getOperationName(statusCode);
       const machineName = await this.getMachineName(machineCode);
+      const timestamp = this.getCurrentTimestamp();
 
       const result = await request
         .input("machine_code", sql.NVarChar, machineCode)
         .input("machine_name", sql.NVarChar, machineName)
-        .input("id_operation", sql.Int, idOperation)
         .input("operation_name", sql.NVarChar, operationName)
-        .input("send_plc", sql.Int, sendPlc)
         .input("machine_counter", sql.Int, machineCounter)
-        .input("created_at", sql.DateTime, new Date())
+        .input("send_plc", sql.Int, sendPlc)
+        .input("updated_at", sql.DateTime2, timestamp)
         .query(`
-          INSERT INTO MACHINE_STATUS_PRODUCTION (
+          MERGE INTO MACHINE_STATUS_PRODUCTION AS target
+          USING (VALUES (@machine_code)) AS source(machine_code)
+          ON target.MachineCode = source.machine_code
+          WHEN MATCHED THEN
+            UPDATE SET 
+              MachineName = @machine_name,
+              OPERATION_NAME = @operation_name,
+              MACHINE_COUNTER = @machine_counter,
+              SEND_PLC = @send_plc,
+              UpdatedAt = @updated_at
+          WHEN NOT MATCHED THEN
+            INSERT (
+              MachineCode, MachineName, OPERATION_NAME,
+              SEND_PLC, MACHINE_COUNTER, CreatedAt, UpdatedAt
+            )
+            VALUES (
+              @machine_code, @machine_name, @operation_name,
+              @send_plc, @machine_counter, @updated_at, @updated_at
+            );
+        `);
+
+      logger.info(`Realtime status updated for machine: ${machineName} (${machineCode})`);
+      return true;
+    } catch (error) {
+      logger.error("Error updating realtime status:", error);
+      throw error;
+    }
+  }
+
+  async saveToHistory(machineCode, data) {
+    try {
+      const request = this.pool.request();
+      const [statusCode, sendPlc, machineCounter] = data;
+      const operationName = OperationTranslator.getOperationName(statusCode);
+      const machineName = await this.getMachineName(machineCode);
+      const timestamp = this.getCurrentTimestamp();
+
+      const result = await request
+        .input("machine_code", sql.NVarChar, machineCode)
+        .input("machine_name", sql.NVarChar, machineName)
+        .input("operation_name", sql.NVarChar, operationName)
+        .input("machine_counter", sql.Int, machineCounter)
+        .input("send_plc", sql.Int, sendPlc)
+        .input("created_at", sql.DateTime2, timestamp)
+        .query(`
+          INSERT INTO HISTORY_MACHINE_PRODUCTION (
             MachineCode,
             MachineName, 
-            ID_OPERATION,
             OPERATION_NAME,
-            SEND_PLC, 
             MACHINE_COUNTER, 
+            SEND_PLC, 
             CreatedAt
           )
           VALUES (
             @machine_code,
             @machine_name, 
-            @id_operation,
             @operation_name,
-            @send_plc, 
             @machine_counter, 
+            @send_plc, 
             @created_at
           );
           SELECT SCOPE_IDENTITY() AS id;
         `);
 
-      logger.info(`Data saved to database with ID: ${result.recordset[0].id}`);
-      logger.info(`Machine: ${machineName} (${machineCode})`);
-      logger.info(`Operation Status: ${operationName} (${idOperation})`);
+      logger.info(`Historical data saved with ID: ${result.recordset[0].id}`);
       return result.recordset[0].id;
     } catch (error) {
-      logger.error("Database error:", error);
+      logger.error("Error saving to history:", error);
       throw error;
     }
   }
@@ -114,12 +160,19 @@ class MachineConsumer {
             logger.info("Received data:", data);
 
             if (data.is_update === 1) {
-              await this.saveToDatabase(
+              // Update realtime status
+              await this.updateRealtimeStatus(
                 data.machine_code,
-                data.data,
-                data.is_update
+                data.data
               );
-              logger.info(`Data saved for machine ${data.machine_code}`);
+
+              // Save to history
+              await this.saveToHistory(
+                data.machine_code,
+                data.data
+              );
+
+              logger.info(`Data processed for machine ${data.machine_code}`);
             } else {
               logger.debug(`Skipping duplicate data for machine ${data.machine_code}`);
             }
