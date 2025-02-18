@@ -1,4 +1,4 @@
-//src/services/modbus-manager.js
+// src/services/modbus-manager.js
 const ModbusService = require('./modbus-service');
 const MachineProducer = require('../producer/machine-producer');
 const logger = require('../utils/logger');
@@ -9,6 +9,7 @@ class ModbusManager {
     this.machines = new Map();
     this.producer = new MachineProducer();
     this.isRunning = false;
+    this.pollingInterval = null;
   }
 
   async init() {
@@ -25,11 +26,15 @@ class ModbusManager {
         this.machines.set(config.machineCode, machine);
       }
 
-      // Connect all machines
-      const connections = Array.from(this.machines.values()).map(
-        machine => machine.service.connect()
-      );
-      await Promise.all(connections);
+      // Connect all machines sequentially to avoid connection conflicts
+      for (const machine of this.machines.values()) {
+        try {
+          await machine.service.connect();
+          await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second between connections
+        } catch (error) {
+          logger.error(`Failed to connect to machine ${machine.config.machineCode}:`, error);
+        }
+      }
 
       this.isRunning = true;
       this.startPolling();
@@ -42,15 +47,19 @@ class ModbusManager {
   }
 
   startPolling() {
-    setInterval(async () => {
+    if (this.pollingInterval) {
+      clearInterval(this.pollingInterval);
+    }
+
+    this.pollingInterval = setInterval(async () => {
       if (!this.isRunning) return;
 
       for (const [machineCode, machine] of this.machines) {
-        try {
-          if (!machine.service.isConnected) {
-            continue;
-          }
+        if (!machine.service.isConnected) {
+          continue;
+        }
 
+        try {
           const data = await machine.service.readData();
           if (data) {
             const success = await this.producer.sendData(machineCode, data);
@@ -75,12 +84,13 @@ class ModbusManager {
 
   async restartMachine(machineCode) {
     const machine = this.machines.get(machineCode);
-    if (!machine) return;
+    if (!machine || machine.service.isConnecting) return;
 
     logger.info(`Restarting machine ${machineCode}...`);
     await machine.service.disconnect();
     
     try {
+      await new Promise(resolve => setTimeout(resolve, globalConfig.reconnectDelay));
       await machine.service.connect();
       machine.consecutiveErrors = 0;
       logger.info(`Machine ${machineCode} successfully restarted`);
@@ -92,14 +102,27 @@ class ModbusManager {
   async cleanup() {
     this.isRunning = false;
     
-    // Disconnect all machines
-    const disconnections = Array.from(this.machines.values()).map(
-      machine => machine.service.disconnect()
-    );
-    await Promise.all(disconnections);
+    if (this.pollingInterval) {
+      clearInterval(this.pollingInterval);
+      this.pollingInterval = null;
+    }
     
-    await this.producer.disconnect();
-    logger.info('ModbusManager cleanup completed');
+    // Disconnect all machines sequentially
+    for (const machine of this.machines.values()) {
+      try {
+        await machine.service.disconnect();
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second between disconnections
+      } catch (error) {
+        logger.error(`Error disconnecting machine ${machine.config.machineCode}:`, error);
+      }
+    }
+    
+    try {
+      await this.producer.disconnect();
+      logger.info('ModbusManager cleanup completed');
+    } catch (error) {
+      logger.error('Error disconnecting producer:', error);
+    }
   }
 }
 

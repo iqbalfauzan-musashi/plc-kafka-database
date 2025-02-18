@@ -1,5 +1,6 @@
-//src/producer/machine-producer.js
+// src/producer/machine-producer.js
 const { Kafka } = require("kafkajs");
+const moment = require('moment-timezone');
 const { kafkaConfig } = require("../../config/kafka.config");
 const logger = require('../utils/logger');
 
@@ -27,13 +28,18 @@ class MachineProducer {
     }
 
     try {
+      const timestamp = moment().tz('Asia/Jakarta').valueOf(); // Get timestamp in milliseconds
+      
       await this.producer.send({
         topic: "machine-data",
         messages: [
           {
             key: machineCode,
-            value: JSON.stringify(data),
-            timestamp: Date.now()
+            value: JSON.stringify({
+              ...data,
+              timestamp: moment().tz('Asia/Jakarta').format('YYYY-MM-DD HH:mm:ss.SSS')
+            }),
+            timestamp: timestamp
           }
         ]
       });

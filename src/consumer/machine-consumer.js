@@ -20,13 +20,32 @@ class MachineConsumer {
       await this.consumer.connect();
       logger.info("Consumer connected to Kafka");
 
-      this.pool = await sql.connect(dbConfig);
+      // Configure MSSQL to use the correct timezone
+      const config = {
+        ...dbConfig,
+        options: {
+          ...dbConfig.options,
+          useUTC: false  // Prevent SQL Server from converting local time to UTC
+        }
+      };
+
+      this.pool = await sql.connect(config);
       this.isConnected = true;
       logger.info("Connected to database");
     } catch (error) {
       logger.error("Connection error:", error);
       throw error;
     }
+  }
+
+  getCurrentTimestamp() {
+    return moment().tz('Asia/Jakarta').format('YYYY-MM-DD HH:mm:ss.SSS');
+  }
+
+  parseTimestamp(timestamp) {
+    // Ensure the timestamp is treated as Asia/Jakarta timezone
+    const jakartaTime = moment.tz(timestamp, 'Asia/Jakarta');
+    return jakartaTime.format('YYYY-MM-DD HH:mm:ss.SSS');
   }
 
   async getMachineName(machineCode) {
@@ -50,26 +69,26 @@ class MachineConsumer {
     }
   }
 
-  getCurrentTimestamp() {
-    return moment().tz('Asia/Jakarta').toDate();
-  }
-
-  async updateRealtimeStatus(machineCode, data) {
+  async updateRealtimeStatus(machineCode, data, timestamp) {
     try {
       const request = this.pool.request();
       const [statusCode, sendPlc, machineCounter] = data;
       const operationName = OperationTranslator.getOperationName(statusCode);
       const machineName = await this.getMachineName(machineCode);
-      const timestamp = this.getCurrentTimestamp();
 
-      const result = await request
+      // Convert the timestamp to Jakarta timezone before inserting
+      const jakartaTimestamp = moment.tz(timestamp, 'Asia/Jakarta');
+      const formattedTimestamp = jakartaTimestamp.format('YYYY-MM-DD HH:mm:ss.SSS');
+
+      await request
         .input("machine_code", sql.NVarChar, machineCode)
         .input("machine_name", sql.NVarChar, machineName)
         .input("operation_name", sql.NVarChar, operationName)
         .input("machine_counter", sql.Int, machineCounter)
         .input("send_plc", sql.Int, sendPlc)
-        .input("updated_at", sql.DateTime2, timestamp)
+        .input("updated_at", sql.DateTime2, formattedTimestamp)
         .query(`
+          SET LANGUAGE us_english;  -- Ensure consistent date formatting
           MERGE INTO MACHINE_STATUS_PRODUCTION AS target
           USING (VALUES (@machine_code)) AS source(machine_code)
           ON target.MachineCode = source.machine_code
@@ -91,7 +110,7 @@ class MachineConsumer {
             );
         `);
 
-      logger.info(`Realtime status updated for machine: ${machineName} (${machineCode})`);
+      logger.info(`Realtime status updated for machine: ${machineName} (${machineCode}) at ${formattedTimestamp}`);
       return true;
     } catch (error) {
       logger.error("Error updating realtime status:", error);
@@ -99,13 +118,16 @@ class MachineConsumer {
     }
   }
 
-  async saveToHistory(machineCode, data) {
+  async saveToHistory(machineCode, data, timestamp) {
     try {
       const request = this.pool.request();
       const [statusCode, sendPlc, machineCounter] = data;
       const operationName = OperationTranslator.getOperationName(statusCode);
       const machineName = await this.getMachineName(machineCode);
-      const timestamp = this.getCurrentTimestamp();
+
+      // Convert the timestamp to Jakarta timezone before inserting
+      const jakartaTimestamp = moment.tz(timestamp, 'Asia/Jakarta');
+      const formattedTimestamp = jakartaTimestamp.format('YYYY-MM-DD HH:mm:ss.SSS');
 
       const result = await request
         .input("machine_code", sql.NVarChar, machineCode)
@@ -113,8 +135,9 @@ class MachineConsumer {
         .input("operation_name", sql.NVarChar, operationName)
         .input("machine_counter", sql.Int, machineCounter)
         .input("send_plc", sql.Int, sendPlc)
-        .input("created_at", sql.DateTime2, timestamp)
+        .input("created_at", sql.DateTime2, formattedTimestamp)
         .query(`
+          SET LANGUAGE us_english;  -- Ensure consistent date formatting
           INSERT INTO HISTORY_MACHINE_PRODUCTION (
             MachineCode,
             MachineName, 
@@ -134,7 +157,7 @@ class MachineConsumer {
           SELECT SCOPE_IDENTITY() AS id;
         `);
 
-      logger.info(`Historical data saved with ID: ${result.recordset[0].id}`);
+      logger.info(`Historical data saved with ID: ${result.recordset[0].id} at ${formattedTimestamp}`);
       return result.recordset[0].id;
     } catch (error) {
       logger.error("Error saving to history:", error);
@@ -160,19 +183,19 @@ class MachineConsumer {
             logger.info("Received data:", data);
 
             if (data.is_update === 1) {
-              // Update realtime status
               await this.updateRealtimeStatus(
                 data.machine_code,
-                data.data
+                data.data,
+                data.timestamp
               );
 
-              // Save to history
               await this.saveToHistory(
                 data.machine_code,
-                data.data
+                data.data,
+                data.timestamp
               );
 
-              logger.info(`Data processed for machine ${data.machine_code}`);
+              logger.info(`Data processed for machine ${data.machine_code} at ${data.timestamp}`);
             } else {
               logger.debug(`Skipping duplicate data for machine ${data.machine_code}`);
             }

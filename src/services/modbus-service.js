@@ -1,4 +1,4 @@
-//src/services/modbus-service.js
+// src/services/modbus-service.js
 const Modbus = require('jsmodbus');
 const net = require('net');
 const logger = require('../utils/logger');
@@ -10,58 +10,97 @@ class ModbusService {
     this.socket = new net.Socket();
     this.client = new Modbus.client.TCP(this.socket);
     this.isConnected = false;
+    this.isConnecting = false;
     this.connectionTimeout = null;
     this.lastData = null;
     this.retryCount = 0;
+    this.setupSocketEvents();
   }
 
-  async connect() {
-    return new Promise((resolve, reject) => {
-      if (this.connectionTimeout) {
-        clearTimeout(this.connectionTimeout);
-      }
+  setupSocketEvents() {
+    this.socket.on('error', (err) => {
+      logger.error(`PLC ${this.config.machineCode} connection error:`, err);
+      // Don't call handleDisconnection here as 'close' event will handle it
+    });
 
-      this.socket.on('connect', () => {
-        logger.info(`Connected to PLC ${this.config.machineCode} at ${this.config.host}`);
-        this.isConnected = true;
-        this.retryCount = 0;
-        resolve();
-      });
-
-      this.socket.on('error', (err) => {
-        logger.error(`PLC ${this.config.machineCode} connection error:`, err);
-        this.handleDisconnection();
-      });
-
-      this.socket.on('close', () => {
-        logger.info(`PLC ${this.config.machineCode} connection closed`);
-        this.handleDisconnection();
-      });
-
-      try {
-        this.socket.connect({
-          host: this.config.host,
-          port: this.config.port,
-          timeout: globalConfig.connectionTimeout
-        });
-      } catch (error) {
-        reject(error);
-      }
+    this.socket.on('close', () => {
+      logger.info(`PLC ${this.config.machineCode} connection closed`);
+      this.handleDisconnection();
     });
   }
 
+  async connect() {
+    if (this.isConnecting) {
+      throw new Error(`Connection attempt already in progress for PLC ${this.config.machineCode}`);
+    }
+    
+    if (this.isConnected) {
+      logger.info(`PLC ${this.config.machineCode} is already connected`);
+      return;
+    }
+    
+    this.isConnecting = true;
+    
+    try {
+      return new Promise((resolve, reject) => {
+        if (this.connectionTimeout) {
+          clearTimeout(this.connectionTimeout);
+        }
+
+        const connectTimeout = setTimeout(() => {
+          this.socket.destroy();
+          this.isConnecting = false;
+          reject(new Error(`Connection timeout for PLC ${this.config.machineCode}`));
+        }, globalConfig.connectionTimeout);
+
+        this.socket.once('connect', () => {
+          clearTimeout(connectTimeout);
+          logger.info(`Connected to PLC ${this.config.machineCode} at ${this.config.host}`);
+          this.isConnected = true;
+          this.isConnecting = false;
+          this.retryCount = 0;
+          resolve();
+        });
+
+        this.socket.once('error', (err) => {
+          clearTimeout(connectTimeout);
+          this.isConnecting = false;
+          reject(err);
+        });
+
+        this.socket.connect({
+          host: this.config.host,
+          port: this.config.port
+        });
+      });
+    } catch (error) {
+      this.isConnecting = false;
+      throw error;
+    }
+  }
+
   handleDisconnection() {
+    if (!this.isConnected && !this.isConnecting) return;
+    
     this.isConnected = false;
-    this.socket.destroy();
+    this.isConnecting = false;
+    
+    if (this.socket) {
+      this.socket.destroy();
+    }
 
     if (this.retryCount < globalConfig.maxRetries) {
       this.retryCount++;
-      this.connectionTimeout = setTimeout(() => {
-        logger.info(`Attempting to reconnect to PLC ${this.config.machineCode} (Attempt ${this.retryCount}/${globalConfig.maxRetries})...`);
-        this.connect().catch(err => {
+      this.connectionTimeout = setTimeout(async () => {
+        try {
+          logger.info(`Attempting to reconnect to PLC ${this.config.machineCode} (Attempt ${this.retryCount}/${globalConfig.maxRetries})...`);
+          await this.connect();
+        } catch (err) {
           logger.error(`Reconnection attempt failed for ${this.config.machineCode}:`, err);
-        });
+        }
       }, globalConfig.reconnectDelay);
+    } else {
+      logger.error(`Maximum retry attempts reached for PLC ${this.config.machineCode}`);
     }
   }
 
@@ -111,14 +150,19 @@ class ModbusService {
     }
   }
 
-  disconnect() {
+  async disconnect() {
     if (this.connectionTimeout) {
       clearTimeout(this.connectionTimeout);
     }
+    
+    this.isConnected = false;
+    this.isConnecting = false;
+    
     if (this.socket) {
+      this.socket.removeAllListeners();
       this.socket.destroy();
     }
-    this.isConnected = false;
+    
     logger.info(`Disconnected from PLC ${this.config.machineCode}`);
   }
 }

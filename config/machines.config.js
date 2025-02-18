@@ -10,6 +10,15 @@ const machinesConfig = [
     }
   },
   {
+    machineCode: '45050',
+    host: '10.42.46.2',
+    port: 502,
+    registers: {
+      startAddress: 45,
+      length: 3
+    }
+  },
+  {
     machineCode: '45045',
     host: '10.42.46.3',
     port: 502,
